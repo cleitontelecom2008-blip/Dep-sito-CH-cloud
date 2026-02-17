@@ -100,6 +100,96 @@
 
         .drop-zone { border: 2px dashed #3b82f6; transition: all 0.3s; }
         .drop-zone:hover { background: rgba(59, 130, 246, 0.1); }
+
+        /* Animação de confirmação ao adicionar ao carrinho */
+        @keyframes cartFlash {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59,130,246,0.7); }
+            30% { transform: scale(0.94); box-shadow: 0 0 0 8px rgba(59,130,246,0.3); }
+            60% { transform: scale(1.04); box-shadow: 0 0 0 12px rgba(59,130,246,0); }
+            100% { transform: scale(1); box-shadow: none; }
+        }
+        @keyframes cartFlashPack {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(245,158,11,0.7); }
+            30% { transform: scale(0.94); box-shadow: 0 0 0 8px rgba(245,158,11,0.3); }
+            60% { transform: scale(1.04); box-shadow: 0 0 0 12px rgba(245,158,11,0); }
+            100% { transform: scale(1); box-shadow: none; }
+        }
+        .btn-flash-un { animation: cartFlash 0.45s ease-out forwards; }
+        .btn-flash-pack { animation: cartFlashPack 0.45s ease-out forwards; }
+
+        /* Badge de confirmação no carrinho */
+        @keyframes badgePop {
+            0% { transform: scale(0); opacity:0; }
+            60% { transform: scale(1.3); opacity:1; }
+            100% { transform: scale(1); opacity:1; }
+        }
+        #cartBadge { animation: badgePop 0.3s ease-out forwards; }
+
+        /* Cards de produto mais visíveis */
+        .produto-card {
+            background: linear-gradient(135deg, rgba(15,23,42,0.95) 0%, rgba(10,16,30,0.98) 100%);
+            border: 1px solid rgba(255,255,255,0.07);
+            border-left: 4px solid #3b82f6;
+            border-radius: 1.25rem;
+            transition: all 0.2s;
+        }
+        .produto-card:hover { border-color: rgba(59,130,246,0.6); background: rgba(15,23,42,1); }
+        .produto-card .prod-nome { font-size: 0.78rem; font-weight: 800; color: #e2e8f0; letter-spacing: 0.02em; }
+        .produto-card .prod-stock { font-size: 0.68rem; color: #64748b; font-weight: 700; }
+        .produto-card .prod-stock.low { color: #ef4444; }
+        .btn-unid {
+            background: rgba(59,130,246,0.12);
+            border: 1px solid rgba(59,130,246,0.2);
+            border-radius: 0.75rem;
+            padding: 0.6rem 0.5rem;
+            flex: 1;
+            transition: all 0.15s;
+            cursor: pointer;
+            min-width: 0;
+        }
+        .btn-unid:hover { background: rgba(59,130,246,0.25); border-color: rgba(59,130,246,0.5); }
+        .btn-unid:active { transform: scale(0.95); }
+        .btn-pack {
+            background: rgba(245,158,11,0.12);
+            border: 1px solid rgba(245,158,11,0.2);
+            border-radius: 0.75rem;
+            padding: 0.6rem 0.5rem;
+            flex: 1;
+            transition: all 0.15s;
+            cursor: pointer;
+            min-width: 0;
+        }
+        .btn-pack:hover { background: rgba(245,158,11,0.25); border-color: rgba(245,158,11,0.5); }
+        .btn-pack:active { transform: scale(0.95); }
+
+        /* Modal edição inline de produto no estoque */
+        #modalEditProduto .modal-body { max-height: 85vh; overflow-y: auto; }
+
+        /* Carrinho com indicador de adição */
+        #carrinhoContainer { position: relative; }
+        #cartAddIndicator {
+            position: absolute;
+            top: -10px; right: -10px;
+            background: #3b82f6;
+            color: white;
+            border-radius: 999px;
+            width: 22px; height: 22px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 10px; font-weight: 900;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        #cartAddIndicator.show { opacity: 1; }
+
+        /* Novo item no carrinho com highlight */
+        .carrinho-item-new {
+            animation: newItemSlide 0.35s ease-out;
+        }
+        @keyframes newItemSlide {
+            from { opacity:0; transform: translateX(20px) scale(0.95); background: rgba(59,130,246,0.2); }
+            to { opacity:1; transform: translateX(0) scale(1); background: transparent; }
+        }
     </style>
 </head>
 <body class="min-h-screen">
@@ -179,6 +269,75 @@
         </div>
     </div>
 
+    <!-- Modal Editar Produto (Estoque) -->
+    <div id="modalEditProduto" class="modal-overlay">
+        <div class="glass rounded-[2.5rem] w-full max-w-md mx-4 border border-white/10 shadow-2xl overflow-hidden">
+            <div class="p-6 border-b border-white/5 flex items-center justify-between">
+                <h3 class="text-sm font-black uppercase tracking-wider text-blue-400"><i class="fas fa-edit mr-2"></i>Editar Produto</h3>
+                <button onclick="toggleModal('modalEditProduto')" class="w-8 h-8 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"><i class="fas fa-times text-xs"></i></button>
+            </div>
+            <div class="modal-body p-6 space-y-4">
+                <input type="hidden" id="modalEditProdId">
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="col-span-2">
+                        <label class="label-blue">Nome do Produto</label>
+                        <input type="text" id="modalEditNome" class="input-field" placeholder="Nome">
+                    </div>
+                    <div>
+                        <label class="label-blue">Custo Compra (Un.)</label>
+                        <input type="number" id="modalEditCusto" class="input-field" placeholder="0.00" step="0.01">
+                    </div>
+                    <div>
+                        <label class="label-blue">Preço Venda (Un.)</label>
+                        <input type="number" id="modalEditPreco" class="input-field" placeholder="0.00" step="0.01">
+                    </div>
+                    <div>
+                        <label class="label-blue">Stock Atual (Un.)</label>
+                        <div class="flex items-center gap-2">
+                            <button onclick="ajustarModalStock(-1)" class="w-10 h-10 rounded-xl bg-slate-800 text-red-400 font-black text-lg border border-white/5 hover:bg-red-500/20 flex-shrink-0">−</button>
+                            <input type="number" id="modalEditQtd" class="input-field text-center font-black text-lg" placeholder="0">
+                            <button onclick="ajustarModalStock(1)" class="w-10 h-10 rounded-xl bg-slate-800 text-emerald-400 font-black text-lg border border-white/5 hover:bg-emerald-500/20 flex-shrink-0">+</button>
+                        </div>
+                    </div>
+                    <div class="flex items-end">
+                        <div class="w-full">
+                            <label class="label-blue">Entrada Rápida</label>
+                            <div class="flex gap-2">
+                                <input type="number" id="modalEntradaQtd" class="input-field text-center" placeholder="Qtd">
+                                <button onclick="entradaRapidaModal()" class="bg-emerald-600/20 text-emerald-400 px-3 rounded-xl text-xs font-black border border-emerald-500/20 hover:bg-emerald-600/40 whitespace-nowrap">+ Stock</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Packs -->
+                <div class="bg-black/20 p-5 rounded-2xl border border-white/5">
+                    <h4 class="label-blue text-amber-400 mb-3"><i class="fas fa-box mr-1"></i>Packs de Venda</h4>
+                    <div id="modalPacksList" class="space-y-2 mb-4"></div>
+                    <div class="grid grid-cols-2 gap-3 mb-3">
+                        <div>
+                            <label class="label-blue">Qtd Pack</label>
+                            <input type="number" id="modalNewPackUn" class="input-field" placeholder="Ex: 6">
+                        </div>
+                        <div>
+                            <label class="label-blue">Preço Pack</label>
+                            <input type="number" id="modalNewPackPreco" class="input-field" placeholder="Ex: 15.00" step="0.01">
+                        </div>
+                    </div>
+                    <button onclick="adicionarPackModal()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-[10px] uppercase border border-white/5 transition-all">
+                        <i class="fas fa-plus mr-2 text-amber-400"></i>Adicionar Pack
+                    </button>
+                </div>
+            </div>
+            <div class="p-6 border-t border-white/5 flex gap-3">
+                <button onclick="salvarEdicaoProduto()" class="flex-1 bg-blue-600 hover:bg-blue-500 py-4 rounded-xl font-black uppercase text-xs transition-all">
+                    <i class="fas fa-check mr-2"></i>Guardar Alterações
+                </button>
+                <button onclick="toggleModal('modalEditProduto')" class="bg-slate-800 hover:bg-slate-700 px-6 rounded-xl font-black uppercase text-xs text-slate-400 transition-all">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Conteúdo Principal -->
     <div id="app-content" class="hidden flex flex-col min-h-screen">
         <header class="bg-slate-900/50 backdrop-blur-xl border-b border-white/5 px-6 py-4 flex justify-between items-center sticky top-0 z-40">
@@ -221,8 +380,11 @@
                     </div>
                     
                     <div class="lg:col-span-4">
-                        <div class="glass p-6 rounded-[2.5rem] flex flex-col h-full sticky top-24 border border-white/5">
-                            <h3 class="label-blue">Carrinho Atual</h3>
+                        <div id="carrinhoContainer" class="glass p-6 rounded-[2.5rem] flex flex-col h-full sticky top-24 border border-white/5">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="label-blue !mb-0">Carrinho Atual</h3>
+                                <span id="cartCountBadge" class="hidden bg-blue-500 text-white text-[9px] font-black rounded-full px-2 py-0.5 min-w-[22px] text-center">0</span>
+                            </div>
                             <div id="carrinhoLista" class="flex-1 overflow-y-auto space-y-3 mb-6 custom-scroll min-h-[250px]"></div>
                             <div class="pt-6 border-t border-white/10 text-center">
                                 <h2 id="displayCartTotal" class="text-4xl font-black text-blue-500 mb-4">R$ 0,00</h2>
@@ -418,6 +580,17 @@
         <div id="toastIcon"></div>
         <div class="flex flex-col"><span class="text-[11px] font-black uppercase" id="toastMsg"></span><span class="text-[9px] text-slate-500 font-bold uppercase" id="toastSubMsg"></span></div>
     </div>
+
+    <!-- Botão flutuante do carrinho (mobile) -->
+    <button id="floatingCartBtn" onclick="scrollToCarrinho()" 
+        class="lg:hidden fixed bottom-6 right-6 z-50 bg-blue-600 text-white rounded-2xl px-5 py-4 font-black text-xs uppercase shadow-xl shadow-blue-500/30 border border-blue-400/20 transition-all opacity-0 pointer-events-none flex items-center gap-3"
+        style="transition: opacity 0.3s, transform 0.3s;">
+        <i class="fas fa-shopping-cart text-base"></i>
+        <div class="flex flex-col items-start leading-none">
+            <span id="floatingCartCount" class="text-[9px] text-blue-200">0 itens</span>
+            <span id="floatingCartTotal" class="text-sm font-black">R$ 0,00</span>
+        </div>
+    </button>
 
     <script>
         const STORAGE_KEY = 'CH_GELADAS_DB_ENTERPRISE';
@@ -635,26 +808,43 @@
             const search = document.getElementById('searchProd').value.toLowerCase();
             const cont = document.getElementById('catalogoVenda');
             const filtered = db.estoque.filter(p => p.nome.toLowerCase().includes(search));
-            cont.innerHTML = filtered.map(p => `
-                <div class="glass p-5 rounded-2xl border-l-4 border-blue-500">
-                    <p class="text-[10px] font-black uppercase text-slate-300 mb-4">${p.nome} (${p.qtdUn} un)</p>
-                    <div class="flex flex-wrap gap-2">
-                        <button onclick="addAoCarrinho(${p.id}, 0)" class="bg-blue-600/10 p-3 rounded-xl flex-1 border border-blue-500/10 hover:bg-blue-600/20 active:scale-95 transition-all">
-                            <span class="block text-[8px] font-black text-blue-400">UNID.</span>
-                            <span class="text-xs font-black">R$ ${p.precoUn.toFixed(2)}</span>
-                        </button>
-                        ${p.packs.map((pack, idx) => `
-                            <button onclick="addAoCarrinho(${p.id}, ${idx + 1})" class="bg-amber-600/10 p-3 rounded-xl flex-1 border border-amber-500/10 hover:bg-amber-600/20 active:scale-95 transition-all">
-                                <span class="block text-[8px] font-black text-amber-500">PACK ${pack.un}</span>
-                                <span class="text-xs font-black">R$ ${pack.preco.toFixed(2)}</span>
-                            </button>
-                        `).join('')}
+            cont.innerHTML = filtered.map(p => {
+                const stockLow = p.qtdUn <= 3;
+                const stockZero = p.qtdUn <= 0;
+                return `
+                <div class="produto-card p-4" id="card-prod-${p.id}">
+                    <div class="flex items-start justify-between mb-3">
+                        <div>
+                            <p class="prod-nome">${p.nome}</p>
+                            <p class="prod-stock ${stockLow ? 'low' : ''}">
+                                <i class="fas fa-box-open mr-1"></i>
+                                ${stockZero ? 'SEM STOCK' : `${p.qtdUn} un. disponíveis`}
+                                ${stockLow && !stockZero ? '⚠️' : ''}
+                            </p>
+                        </div>
+                        <span class="text-[9px] font-black px-2 py-1 rounded-lg ${stockZero ? 'bg-red-500/20 text-red-400' : stockLow ? 'bg-amber-500/20 text-amber-400' : 'bg-emerald-500/20 text-emerald-400'}">
+                            ${stockZero ? 'ESGOT.' : stockLow ? 'BAIXO' : 'OK'}
+                        </span>
                     </div>
-                </div>
-            `).join('');
+                    <div class="flex flex-wrap gap-2">
+                        <button id="btn-un-${p.id}" onclick="addAoCarrinho(${p.id}, 0, this)" class="btn-unid ${stockZero ? 'opacity-40 cursor-not-allowed' : ''}">
+                            <span class="block text-[8px] font-black text-blue-400 mb-0.5">UNID.</span>
+                            <span class="text-sm font-black text-white">R$ ${p.precoUn.toFixed(2)}</span>
+                        </button>
+                        ${p.packs.map((pack, idx) => {
+                            const semStock = p.qtdUn < pack.un;
+                            return `
+                            <button id="btn-pack-${p.id}-${idx}" onclick="addAoCarrinho(${p.id}, ${idx + 1}, this)" class="btn-pack ${semStock ? 'opacity-40 cursor-not-allowed' : ''}">
+                                <span class="block text-[8px] font-black text-amber-500 mb-0.5">PACK ${pack.un}x</span>
+                                <span class="text-sm font-black text-white">R$ ${pack.preco.toFixed(2)}</span>
+                            </button>`;
+                        }).join('')}
+                    </div>
+                </div>`;
+            }).join('');
         }
 
-        function addAoCarrinho(prodId, packIdx) {
+        function addAoCarrinho(prodId, packIdx, btnEl) {
             const p = db.estoque.find(x => x.id === prodId);
             let item = { prodId: p.id, nome: p.nome };
             if(packIdx === 0) {
@@ -667,20 +857,89 @@
             }
             carrinho.push(item);
             renderCarrinho();
+
+            // Animação no botão
+            if(btnEl) {
+                const cls = packIdx === 0 ? 'btn-flash-un' : 'btn-flash-pack';
+                btnEl.classList.remove(cls);
+                void btnEl.offsetWidth; // reflow para reiniciar
+                btnEl.classList.add(cls);
+                setTimeout(() => btnEl.classList.remove(cls), 500);
+            }
+
+            // Scroll para o carrinho em desktop; mostra botão flutuante em mobile
+            atualizarBotaoFlutuante();
+            
+            // Em ecrãs pequenos, se o carrinho não está visível, pisca o botão flutuante
+            const isMobile = window.innerWidth < 1024;
+            if(isMobile) {
+                const floatBtn = document.getElementById('floatingCartBtn');
+                floatBtn.style.transform = 'scale(1.1)';
+                setTimeout(() => floatBtn.style.transform = 'scale(1)', 200);
+            }
         }
 
         function renderCarrinho() {
             const cont = document.getElementById('carrinhoLista');
-            cont.innerHTML = carrinho.map((c, idx) => `
-                <div class="flex justify-between items-center bg-slate-950/80 p-4 rounded-2xl border border-white/5">
-                    <div class="flex flex-col"><span class="text-[9px] font-black text-slate-400 uppercase">${c.nome}</span><span class="text-xs font-black text-blue-500">${c.label} • R$ ${c.preco.toFixed(2)}</span></div>
-                    <button onclick="carrinho.splice(${idx},1); renderCarrinho();" class="text-red-500/50 p-2"><i class="fas fa-trash"></i></button>
-                </div>`).join('');
+            if(carrinho.length === 0) {
+                cont.innerHTML = `<div class="flex flex-col items-center justify-center h-full text-center opacity-30 py-8">
+                    <i class="fas fa-shopping-cart text-3xl mb-3 text-slate-500"></i>
+                    <p class="text-[10px] text-slate-500 font-bold uppercase">Carrinho vazio</p>
+                </div>`;
+            } else {
+                cont.innerHTML = carrinho.map((c, idx) => `
+                    <div class="flex justify-between items-center bg-slate-950/80 p-4 rounded-2xl border border-white/5 ${idx === carrinho.length - 1 ? 'carrinho-item-new' : ''}">
+                        <div class="flex flex-col">
+                            <span class="text-[9px] font-black text-slate-400 uppercase">${c.nome}</span>
+                            <span class="text-xs font-black text-blue-500">${c.label} • <span class="text-white">R$ ${c.preco.toFixed(2)}</span></span>
+                        </div>
+                        <button onclick="removerDoCarrinho(${idx})" class="text-red-500/50 hover:text-red-400 p-2 transition-colors"><i class="fas fa-trash text-xs"></i></button>
+                    </div>`).join('');
+            }
             const total = carrinho.reduce((a, b) => a + b.preco, 0);
-            document.getElementById('displayCartTotal').textContent = `R$ ${total.toFixed(2)}`;
+            document.getElementById('displayCartTotal').textContent = `R$ ${total.toLocaleString('pt-PT', {minimumFractionDigits:2})}`;
+            
+            // Badge contador
+            const badge = document.getElementById('cartCountBadge');
+            if(carrinho.length > 0) {
+                badge.textContent = carrinho.length;
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+
             const btn = document.getElementById('btnFinalizar');
             btn.disabled = carrinho.length === 0;
             btn.className = `w-full py-5 rounded-2xl font-black uppercase text-[11px] ${carrinho.length > 0 ? 'bg-blue-600 text-white shadow-xl shadow-blue-500/20 hover:bg-blue-500' : 'bg-slate-800 text-slate-500'}`;
+
+            atualizarBotaoFlutuante();
+        }
+
+        function removerDoCarrinho(idx) {
+            carrinho.splice(idx, 1);
+            renderCarrinho();
+            atualizarBotaoFlutuante();
+        }
+
+        function atualizarBotaoFlutuante() {
+            const total = carrinho.reduce((a, b) => a + b.preco, 0);
+            const floatBtn = document.getElementById('floatingCartBtn');
+            const floatCount = document.getElementById('floatingCartCount');
+            const floatTotal = document.getElementById('floatingCartTotal');
+            if(carrinho.length > 0) {
+                floatCount.textContent = `${carrinho.length} ${carrinho.length === 1 ? 'item' : 'itens'}`;
+                floatTotal.textContent = `R$ ${total.toLocaleString('pt-PT', {minimumFractionDigits:2})}`;
+                floatBtn.style.opacity = '1';
+                floatBtn.style.pointerEvents = 'auto';
+            } else {
+                floatBtn.style.opacity = '0';
+                floatBtn.style.pointerEvents = 'none';
+            }
+        }
+
+        function scrollToCarrinho() {
+            const el = document.getElementById('carrinhoContainer');
+            if(el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
 
         function finalizarVenda() {
@@ -877,22 +1136,23 @@
             document.getElementById('gridEstoque').innerHTML = db.estoque.map(p => `
                 <div class="bg-slate-900/50 p-5 rounded-2xl border border-white/5 relative group transition-all hover:bg-slate-900">
                     <div class="absolute top-4 right-4 flex gap-2">
-                        <button onclick="editProduto(${p.id})" title="Editar" class="text-blue-500/40 hover:text-blue-400"><i class="fas fa-edit"></i></button>
-                        <button onclick="if(confirm('Apagar ${p.nome}?')) { db.estoque = db.estoque.filter(x => x.id !== ${p.id}); save(); }" title="Apagar" class="text-slate-700 hover:text-red-500"><i class="fas fa-times-circle"></i></button>
+                        <button onclick="abrirEditarProduto(${p.id})" title="Editar" class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white flex items-center justify-center transition-all"><i class="fas fa-edit text-xs"></i></button>
+                        <button onclick="if(confirm('Apagar ${p.nome}?')) { db.estoque = db.estoque.filter(x => x.id !== ${p.id}); save(); }" title="Apagar" class="w-8 h-8 rounded-lg bg-slate-800 text-slate-600 hover:bg-red-500 hover:text-white flex items-center justify-center transition-all"><i class="fas fa-times text-xs"></i></button>
                     </div>
-                    <p class="label-blue !mb-2 !ml-0">${p.nome}</p>
+                    <p class="label-blue !mb-2 !ml-0 pr-20">${p.nome}</p>
                     <div class="flex justify-between items-end">
                         <div>
                             <span class="block text-[8px] text-slate-500 font-black mb-1">STOCK</span>
                             <div class="flex items-center gap-1">
                                 <button onclick="quickStockAction(${p.id}, 'remove')" class="w-6 h-6 rounded bg-slate-800 text-red-500 hover:bg-red-500/20 font-bold border border-white/5">-</button>
-                                <span class="text-xl font-black min-w-[30px] text-center">${p.qtdUn}</span>
+                                <span class="text-xl font-black min-w-[30px] text-center ${p.qtdUn <= 3 ? 'text-amber-400' : ''}">${p.qtdUn}</span>
                                 <button onclick="quickStockAction(${p.id}, 'add')" class="w-6 h-6 rounded bg-slate-800 text-emerald-500 hover:bg-emerald-500/20 font-bold border border-white/5">+</button>
                             </div>
                         </div>
                         <div class="text-right">
                             <span class="block text-[8px] text-slate-500 font-black">VENDA UN</span>
                             <span class="text-sm font-bold text-slate-400">R$ ${p.precoUn.toFixed(2)}</span>
+                            ${p.packs && p.packs.length > 0 ? `<span class="block text-[8px] text-amber-400/60 font-bold">${p.packs.length} pack(s)</span>` : ''}
                         </div>
                     </div>
                 </div>`).join('');
@@ -920,6 +1180,93 @@
             document.getElementById('statProds').textContent = db.estoque ? db.estoque.length : 0;
             document.getElementById('statVendas').textContent = db.vendas ? db.vendas.length : 0;
             document.getElementById('statPonto').textContent = db.ponto ? db.ponto.length : 0;
+        }
+
+        // --- EDIÇÃO DE PRODUTO VIA MODAL ---
+        let modalEditPacks = [];
+
+        function abrirEditarProduto(id) {
+            const p = db.estoque.find(x => x.id == id);
+            if(!p) return;
+            modalEditPacks = JSON.parse(JSON.stringify(p.packs || []));
+            document.getElementById('modalEditProdId').value = p.id;
+            document.getElementById('modalEditNome').value = p.nome;
+            document.getElementById('modalEditCusto').value = p.custoUn;
+            document.getElementById('modalEditPreco').value = p.precoUn;
+            document.getElementById('modalEditQtd').value = p.qtdUn;
+            document.getElementById('modalEntradaQtd').value = '';
+            document.getElementById('modalNewPackUn').value = '';
+            document.getElementById('modalNewPackPreco').value = '';
+            renderModalPacks();
+            toggleModal('modalEditProduto');
+        }
+
+        function renderModalPacks() {
+            const cont = document.getElementById('modalPacksList');
+            if(modalEditPacks.length === 0) {
+                cont.innerHTML = `<p class="text-[9px] text-slate-500 text-center font-bold uppercase py-2">Sem packs configurados</p>`;
+                return;
+            }
+            cont.innerHTML = modalEditPacks.map((pk, i) => `
+                <div class="flex justify-between items-center bg-black/30 px-4 py-3 rounded-xl border border-white/5">
+                    <div>
+                        <span class="text-[10px] font-black text-amber-400">PACK ${pk.un}x</span>
+                        <span class="text-[10px] text-slate-400 ml-2">R$ ${pk.preco.toFixed(2)}</span>
+                    </div>
+                    <div class="flex gap-2 items-center">
+                        <input type="number" value="${pk.preco}" onchange="modalEditPacks[${i}].preco = parseFloat(this.value)||0; renderModalPacks();" 
+                            class="w-20 bg-slate-900 border border-white/10 rounded-lg px-2 py-1 text-[10px] text-center font-bold text-white outline-none focus:border-blue-500" step="0.01">
+                        <button onclick="modalEditPacks.splice(${i},1); renderModalPacks();" class="w-7 h-7 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white flex items-center justify-center transition-all">
+                            <i class="fas fa-times text-[9px]"></i>
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function adicionarPackModal() {
+            const un = parseInt(document.getElementById('modalNewPackUn').value);
+            const preco = parseFloat(document.getElementById('modalNewPackPreco').value);
+            if(!un || isNaN(preco) || preco <= 0) return showToast("Erro", "Preencha qtd e preço do pack", "error");
+            if(modalEditPacks.find(p => p.un === un)) return showToast("Aviso", "Pack com essa qtd já existe", "warning");
+            modalEditPacks.push({ un, preco });
+            document.getElementById('modalNewPackUn').value = '';
+            document.getElementById('modalNewPackPreco').value = '';
+            renderModalPacks();
+            showToast("Pack", `Pack ${un}x adicionado`);
+        }
+
+        function ajustarModalStock(delta) {
+            const input = document.getElementById('modalEditQtd');
+            const val = parseInt(input.value) || 0;
+            input.value = Math.max(0, val + delta);
+        }
+
+        function entradaRapidaModal() {
+            const qtd = parseInt(document.getElementById('modalEntradaQtd').value);
+            if(!qtd || qtd <= 0) return showToast("Erro", "Insira uma quantidade válida", "error");
+            const currentQtd = document.getElementById('modalEditQtd');
+            currentQtd.value = (parseInt(currentQtd.value) || 0) + qtd;
+            document.getElementById('modalEntradaQtd').value = '';
+            showToast("Entrada", `+${qtd} adicionado`);
+        }
+
+        function salvarEdicaoProduto() {
+            const id = parseInt(document.getElementById('modalEditProdId').value);
+            const nome = document.getElementById('modalEditNome').value.trim();
+            const custoUn = parseFloat(document.getElementById('modalEditCusto').value) || 0;
+            const precoUn = parseFloat(document.getElementById('modalEditPreco').value) || 0;
+            const qtdUn = parseInt(document.getElementById('modalEditQtd').value) || 0;
+            
+            if(!nome) return showToast("Erro", "Nome obrigatório", "error");
+            
+            const idx = db.estoque.findIndex(p => p.id == id);
+            if(idx !== -1) {
+                db.estoque[idx] = { ...db.estoque[idx], nome, custoUn, precoUn, qtdUn, packs: [...modalEditPacks] };
+                save();
+                toggleModal('modalEditProduto');
+                showToast("Produto Atualizado", nome);
+            }
         }
 
         function resetSistema() {
