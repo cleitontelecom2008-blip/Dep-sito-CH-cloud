@@ -134,7 +134,30 @@ body.is-admin .adm-ui-block{display:block!important}
 .adm-ui-block{display:none!important}
 
 /* ══ MAIN ══ */
-main{flex:1;padding:16px;max-width:920px;margin:0 auto;width:100%;padding-bottom:calc(80px + var(--safe-b))}
+main{flex:1;padding:16px;max-width:1320px;margin:0 auto;width:100%;padding-bottom:calc(84px + var(--safe-b))}
+@media(min-width:1024px){
+  main{padding:22px 28px;padding-bottom:28px}
+  .bottom-nav{display:none!important}
+  #floatCart{display:none!important}
+  #app{flex-direction:row!important;align-items:flex-start}
+  .app-main-col{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh}
+  .app-sidebar{
+    width:68px;flex-shrink:0;position:sticky;top:0;height:100vh;overflow:hidden;
+    display:flex;flex-direction:column;align-items:center;
+    background:rgba(6,7,15,.98);border-right:1px solid var(--border);
+    padding:10px 0 20px;gap:2px;z-index:45;
+  }
+  .app-sidebar .snav-btn{
+    width:46px;height:46px;border-radius:13px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:2px;padding:6px 4px;cursor:pointer;border:none;background:transparent;
+    color:var(--txt3);transition:all .2s;position:relative;
+  }
+  .app-sidebar .snav-btn.active{color:var(--blue);background:rgba(59,130,246,.1)}
+  .app-sidebar .snav-btn i{font-size:16px}
+  .app-sidebar .snav-label{font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-body)}
+}
+@media(max-width:1023px){.app-sidebar{display:none!important}}
 .tab-pane{display:none;animation:fadeUp .22s ease}
 .tab-pane.active{display:block}
 @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
@@ -350,6 +373,8 @@ main{flex:1;padding:16px;max-width:920px;margin:0 auto;width:100%;padding-bottom
 }
 #watermark i{font-size:.45rem;color:rgba(59,130,246,.3);}
 
+/* hidden-force: usado para forçar display:none mesmo em elementos com !important */
+.hidden-force{display:none!important}
 /* Configurações */
 .config-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border)}
 .config-row:last-child{border-bottom:none}
@@ -387,21 +412,26 @@ function setSyncStatus(status) {
   el.innerHTML = `<i class="fas ${s.icon}" style="color:${s.color};font-size:13px" title="${s.title}"></i>`;
 }
 
-// ── Backup para Firestore ──
-async function backupFirestore() {
+// ── Backup para Firestore (com retry) ──
+async function backupFirestore(attempt=0) {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return;
   setSyncStatus('syncing');
   try {
+    const parsed = JSON.parse(raw);
     await setDoc(doc(firestoreDB, "ch_geladas", DOC_ID), {
-      data: JSON.parse(raw),
-      updated: new Date().toISOString()
+      data: parsed,
+      updated: parsed._updated || new Date().toISOString()
     });
     setSyncStatus('ok');
     console.log("🔥 Sync OK", new Date().toLocaleTimeString('pt-BR'));
   } catch(e) {
-    setSyncStatus('error');
-    console.error("Sync erro:", e);
+    if (attempt < 2) {
+      setTimeout(()=>backupFirestore(attempt+1), 2000*(attempt+1));
+    } else {
+      setSyncStatus('error');
+      console.error("Sync erro após retries:", e);
+    }
   }
 }
 
@@ -411,31 +441,37 @@ async function restoreFirestore() {
   try {
     const snap = await getDoc(doc(firestoreDB, "ch_geladas", DOC_ID));
     if (snap.exists()) {
-      _syncBlock = true;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(snap.data().data));
-      _syncBlock = false;
-      console.log("🔥 Restore OK");
+      const remoteUpdated = snap.data().updated || '';
+      const localRaw = localStorage.getItem(STORAGE_KEY);
+      const localUpdated = localRaw ? (JSON.parse(localRaw)?._updated || '') : '';
+      if (!localUpdated || remoteUpdated > localUpdated) {
+        _syncBlock = true;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(snap.data().data));
+        _syncBlock = false;
+        console.log("🔥 Restore OK — remoto mais recente");
+      } else {
+        console.log("🔥 Local mais recente — subindo para cloud");
+        backupFirestore();
+      }
     }
     setSyncStatus('ok');
   } catch(e) {
     setSyncStatus('offline');
     console.warn("Restore falhou (offline?):", e);
+    setTimeout(restoreFirestore, 10000); // tenta de novo em 10s
   }
-  // Inicializa a app depois do restore
-  window.__firebaseReady = true; // marcado APÓS restore, para fallback funcionar
+  window.__firebaseReady = true;
   if (typeof window.initApp === 'function') window.initApp();
 }
 
 // ── Listener em tempo real ──
-// Detecta quando outro dispositivo guarda dados e atualiza localmente
 let _firstSnapshot = true;
 onSnapshot(doc(firestoreDB, "ch_geladas", DOC_ID), (snap) => {
-  if (_firstSnapshot) { _firstSnapshot = false; return; } // ignora o primeiro (é o restore)
+  if (_firstSnapshot) { _firstSnapshot = false; return; }
   if (!snap.exists()) return;
-  const remoteUpdated = snap.data().updated;
-  const localData = localStorage.getItem(STORAGE_KEY);
-  const localUpdated = localData ? JSON.parse(localData)?._updated : null;
-  // Só aplica se o remoto for mais recente
+  const remoteUpdated = snap.data().updated || '';
+  const localRaw = localStorage.getItem(STORAGE_KEY);
+  const localUpdated = localRaw ? (JSON.parse(localRaw)?._updated || '') : '';
   if (!localUpdated || remoteUpdated > localUpdated) {
     _syncBlock = true;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(snap.data().data));
@@ -444,7 +480,7 @@ onSnapshot(doc(firestoreDB, "ch_geladas", DOC_ID), (snap) => {
     setSyncStatus('ok');
     console.log("🔥 Sync em tempo real aplicado");
   }
-});
+}, (err) => { setSyncStatus('error'); console.warn('onSnapshot erro:', err); });
 
 // ── Intercepta o save() do sistema ──
 const _origSetItem = localStorage.setItem.bind(localStorage);
@@ -514,6 +550,17 @@ console.log("🔥 Firebase conectado");
   </div>
 
   <!-- HEADER -->
+  <!-- SIDEBAR DESKTOP -->
+  <aside class="app-sidebar" id="appSidebar">
+    <div style="width:38px;height:38px;background:var(--blue-g);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:18px;margin-bottom:12px;box-shadow:0 0 20px rgba(37,99,235,.4)">🍺</div>
+    <button class="snav-btn active" id="snav-pdv" onclick="switchTab('pdv')"><i class="fas fa-cash-register"></i><span class="snav-label">PDV</span></button>
+    <button class="snav-btn adm-ui hidden" id="snav-estoque" onclick="switchTab('estoque')"><i class="fas fa-boxes-stacked"></i><span class="snav-label">Estoque</span></button>
+    <button class="snav-btn adm-ui hidden" id="snav-financeiro" onclick="switchTab('financeiro')"><i class="fas fa-chart-line"></i><span class="snav-label">Caixa</span></button>
+    <button class="snav-btn" id="snav-ponto" onclick="switchTab('ponto')"><i class="fas fa-user-clock"></i><span class="snav-label">Ponto</span></button>
+    <button class="snav-btn adm-ui hidden" id="snav-ia" onclick="switchTab('ia')"><i class="fas fa-robot"></i><span class="snav-label">IA</span></button>
+    <button class="snav-btn adm-ui hidden" id="snav-dados" onclick="switchTab('dados')"><i class="fas fa-database"></i><span class="snav-label">Dados</span></button>
+  </aside>
+  <div class="app-main-col">
   <header class="header">
     <div class="flex items-center gap-3">
       <div class="logo-icon">🍺</div>
@@ -555,11 +602,10 @@ console.log("🔥 Firebase conectado");
     <!-- ══ PDV ══ -->
     <div class="tab-pane active" id="tab-pdv">
       <!-- Shift warning for collaborator (no shift needed) / admin can open shift -->
-      <div id="shiftWarnPDV" class="shift-warning mb-4 hidden adm-ui-block">
-        <i class="fas fa-cash-register text-amber-400 text-lg mb-2 block"></i>
-        <p class="text-xs font-black text-amber-300 mb-1">Nenhum turno aberto</p>
-        <p class="text-[10px] text-amber-500/70 mb-3">Abra o caixa para iniciar as vendas do dia.</p>
-        <button onclick="openModal('modalAbrirTurno')" class="btn btn-gold btn-sm"><i class="fas fa-play"></i> Abrir Caixa</button>
+      <div id="shiftWarnPDV" class="adm-ui-block hidden-force mb-3" style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.18);border-radius:12px;padding:10px 14px;display:flex;align-items:center;gap:10px">
+        <i class="fas fa-cash-register text-amber-400 text-sm flex-shrink-0"></i>
+        <span class="text-[10px] font-black text-amber-300 flex-1">Nenhum turno aberto — inicie o caixa para começar</span>
+        <button onclick="openModal('modalAbrirTurno')" class="btn btn-gold btn-sm !py-1.5 !px-3 flex-shrink-0"><i class="fas fa-play"></i> Abrir</button>
       </div>
       <div class="grid lg:grid-cols-12 gap-4 lg:gap-5">
         <!-- CATÁLOGO -->
@@ -973,6 +1019,7 @@ console.log("🔥 Firebase conectado");
     </button>
   </nav>
 
+  </div><!-- /app-main-col -->
   <!-- FLOATING CART mobile -->
   <button id="floatCart" onclick="openModal('modalCarrinho')"
     class="lg:hidden fixed bottom-[80px] right-4 z-50 bg-blue-600 text-white rounded-2xl px-4 py-3 font-black text-xs uppercase flex items-center gap-3 border border-blue-400/20"
@@ -1337,6 +1384,32 @@ console.log("🔥 Firebase conectado");
   </div>
 </div>
 
+<!-- Modal Ajuste Rápido de Stock -->
+<div class="modal-overlay" id="modalQuickStock">
+  <div class="modal-box" style="max-width:340px">
+    <div class="p-5 border-b border-white/5 flex justify-between items-center">
+      <h3 class="text-sm font-black" id="qsTitle" style="font-family:var(--font-head)">Ajuste de Stock</h3>
+      <button onclick="closeModal('modalQuickStock')" class="btn btn-ghost btn-icon btn-sm"><i class="fas fa-times text-xs"></i></button>
+    </div>
+    <div class="p-5 space-y-4">
+      <input type="hidden" id="qsProdId">
+      <input type="hidden" id="qsType">
+      <div class="text-center py-2">
+        <p class="text-[10px] text-slate-500 font-bold uppercase" id="qsNome">Produto</p>
+        <div class="flex items-center justify-center gap-3 mt-3">
+          <button onclick="qsAjustar(-1)" class="w-10 h-10 rounded-xl bg-slate-800 text-red-400 font-black text-xl border border-white/5 hover:bg-red-500/20 flex items-center justify-center">−</button>
+          <input type="number" id="qsQtd" class="inp text-center font-black text-2xl !py-2" style="width:90px;font-family:var(--font-head)" placeholder="0" min="1" value="1">
+          <button onclick="qsAjustar(1)" class="w-10 h-10 rounded-xl bg-slate-800 text-green-400 font-black text-xl border border-white/5 hover:bg-green-500/20 flex items-center justify-center">+</button>
+        </div>
+        <p class="text-[9px] text-slate-600 mt-2 font-bold">Stock atual: <span id="qsAtual" class="text-white">0</span> un.</p>
+      </div>
+    </div>
+    <div class="p-5 border-t border-white/5 flex gap-3">
+      <button onclick="confirmarQuickStock()" id="qsConfirm" class="btn btn-green flex-1"><i class="fas fa-check"></i> <span id="qsBtnLabel">Confirmar</span></button>
+      <button onclick="closeModal('modalQuickStock')" class="btn btn-ghost">Cancelar</button>
+    </div>
+  </div>
+</div>
 <!-- ══ SCRIPT ══ -->
 <script>
 'use strict';
@@ -1452,7 +1525,9 @@ window.reloadDB = function(){
   if(!saved)return;
   try{
     const p=JSON.parse(saved);
-    db={...db,...p};
+    // Deep-merge config: preserva tgToken/tgChatId locais se não vierem do remoto
+    const mergedConfig={...db.config,...(p.config||{})};
+    db={...db,...p,config:mergedConfig};
     renderCatalogo();renderPontoLogs();verificarAlertasStock();
     if(document.getElementById('tab-financeiro').classList.contains('active'))renderFinanceiro();
     if(document.getElementById('tab-estoque').classList.contains('active'))renderGridEstoque();
@@ -1460,7 +1535,7 @@ window.reloadDB = function(){
   }catch(e){}
 };
 
-function save(){localStorage.setItem(STORAGE_KEY,JSON.stringify(db))}
+function save(){db._updated=new Date().toISOString();localStorage.setItem(STORAGE_KEY,JSON.stringify(db));}
 function updateClock(){document.getElementById('liveClock').textContent=new Date().toLocaleTimeString('pt-BR')}
 
 /* ══ SHIFT / TURNO ══ */
@@ -1471,13 +1546,12 @@ function updateShiftUI(){
   if(db.turno){
     badge.className='shift-badge cursor-pointer adm-ui';
     document.getElementById('shiftBadgeText').textContent='Turno Aberto';
-    badge.style.display='';
-    if(warnPDV)warnPDV.style.display='none';
+    // Esconder aviso usando hidden-force (funciona mesmo com CSS !important)
+    if(warnPDV)warnPDV.classList.add('hidden-force');
   }else{
     badge.className='shift-badge closed cursor-pointer adm-ui';
     document.getElementById('shiftBadgeText').textContent='Turno Fechado';
-    badge.style.display='';
-    if(warnPDV)warnPDV.style.display='';
+    if(warnPDV)warnPDV.classList.remove('hidden-force');
   }
 }
 function onShiftBadgeClick(){
@@ -1710,11 +1784,16 @@ function beepSuccess(){
 /* ══ TABS ══ */
 function switchTab(id){
   const navBtn=document.getElementById('nav-'+id);
+  const snavBtn=document.getElementById('snav-'+id);
+  // Verifica permissão: aba admin tentada por colaborador
   if(navBtn&&navBtn.classList.contains('adm-ui')&&!isAdmin){showToast('Acesso Negado','Apenas Administrador','error');return;}
+  if(snavBtn&&snavBtn.classList.contains('adm-ui')&&!isAdmin){showToast('Acesso Negado','Apenas Administrador','error');return;}
   document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
-  document.getElementById('tab-'+id).classList.add('active');
+  document.querySelectorAll('.nav-btn,.snav-btn').forEach(b=>b.classList.remove('active'));
+  const pane=document.getElementById('tab-'+id);
+  if(pane)pane.classList.add('active');
   if(navBtn)navBtn.classList.add('active');
+  if(snavBtn)snavBtn.classList.add('active');
   if(id==='estoque'){resetFormEstoque();renderGridEstoque();}
   if(id==='financeiro')renderFinanceiro();
   if(id==='dados'){updateStats();renderTurnosHistorico();}
@@ -1904,18 +1983,41 @@ function deletarProduto(id){
 }
 function quickStockAction(id,type){
   const p=db.estoque.find(x=>x.id===id);if(!p)return;
-  const v=prompt(`${type==='add'?'ADICIONAR':'REMOVER'} quantidade: ${p.nome}\n(Atual: ${p.qtdUn})`);
-  if(v!==null){
-    const qtd=parseInt(v);
-    if(!isNaN(qtd)&&qtd>0){
-      p.qtdUn=type==='add'?p.qtdUn+qtd:p.qtdUn-qtd;
-      notificarTelegram(type==='add'?'estoque_entrada':'estoque_saida',{nome:p.nome,qtd,stockAtual:p.qtdUn});
-      save();renderGridEstoque();renderCatalogo();
-      showToast(type==='add'?'Entrada':'Saída',`${type==='add'?'+':'-'}${qtd} em ${p.nome}`,type==='add'?'success':'warning');
-      verificarAlertasStock();
-    }
-  }
+  document.getElementById('qsProdId').value=id;
+  document.getElementById('qsType').value=type;
+  document.getElementById('qsNome').textContent=p.nome;
+  document.getElementById('qsAtual').textContent=p.qtdUn;
+  document.getElementById('qsQtd').value=1;
+  const isAdd=type==='add';
+  document.getElementById('qsTitle').textContent=isAdd?'📦 Entrada de Stock':'📤 Saída de Stock';
+  document.getElementById('qsTitle').style.color=isAdd?'#34d399':'#f87171';
+  document.getElementById('qsConfirm').className='btn flex-1 '+(isAdd?'btn-green':'btn-red');
+  document.getElementById('qsBtnLabel').textContent=isAdd?'Confirmar Entrada':'Confirmar Saída';
+  openModal('modalQuickStock');
+  setTimeout(()=>document.getElementById('qsQtd').focus(),100);
 }
+function qsAjustar(d){
+  const inp=document.getElementById('qsQtd');
+  inp.value=Math.max(1,(parseInt(inp.value)||1)+d);
+}
+function confirmarQuickStock(){
+  const id=parseInt(document.getElementById('qsProdId').value);
+  const type=document.getElementById('qsType').value;
+  const qtd=parseInt(document.getElementById('qsQtd').value)||0;
+  if(qtd<=0){showToast('Erro','Quantidade deve ser maior que zero','error');return;}
+  const p=db.estoque.find(x=>x.id===id);if(!p)return;
+  if(type==='add'){
+    p.qtdUn+=qtd;
+  }else{
+    if(qtd>p.qtdUn&&!confirm(`Stock atual é ${p.qtdUn}. Ficar negativo?`))return;
+    p.qtdUn=Math.max(0,p.qtdUn-qtd);
+  }
+  notificarTelegram(type==='add'?'estoque_entrada':'estoque_saida',{nome:p.nome,qtd,stockAtual:p.qtdUn});
+  save();closeModal('modalQuickStock');renderGridEstoque();renderCatalogo();
+  showToast(type==='add'?'Entrada':'Saída',`${type==='add'?'+':'-'}${qtd} × ${p.nome}`,type==='add'?'success':'warning');
+  verificarAlertasStock();
+}
+let _tgLowStockTimer=null;
 function verificarAlertasStock(){
   const threshold=db.config.lowStockThreshold||3;
   const low=db.estoque.filter(p=>p.qtdUn<=threshold&&p.qtdUn>0);
@@ -1923,14 +2025,18 @@ function verificarAlertasStock(){
   const countEl=document.getElementById('alertaCount');
   if(low.length>0){
     alertEl.style.display='flex';if(countEl)countEl.textContent=low.length;
-    // Notifica Telegram apenas se produtos ficaram com stock baixo após venda
-    if(window._lastLowCount!==low.length){
-      window._lastLowCount=low.length;
-      notificarTelegram('estoque_baixo',{produtos:low.map(p=>({nome:p.nome,qtd:p.qtdUn}))});
+    // Notifica Telegram com debounce de 5s para evitar spam
+    const key=low.map(p=>p.id+'='+p.qtdUn).join(',');
+    if(window._lastLowKey!==key){
+      window._lastLowKey=key;
+      clearTimeout(_tgLowStockTimer);
+      _tgLowStockTimer=setTimeout(()=>{
+        notificarTelegram('estoque_baixo',{produtos:low.map(p=>({nome:p.nome,qtd:p.qtdUn}))});
+      },5000);
     }
   }else{
     alertEl.style.display='none';
-    window._lastLowCount=0;
+    window._lastLowKey='';
   }
 }
 
@@ -2032,12 +2138,14 @@ function renderCatalogo(){
         <span class="badge ${zero?'badge-red':low2?'badge-amber':'badge-green'} flex-shrink-0">${zero?'ESGOT.':low2?'BAIXO':'OK'}</span>
       </div>
       <div class="flex gap-2 flex-wrap">
-        <button id="btn-un-${p.id}" onclick="addAoCarrinho(${p.id},0,this)" ${zero?'disabled':''} class="btn-unid ${zero?'opacity-30 cursor-not-allowed':''}">
+        <button id="btn-un-${p.id}" onclick="addAoCarrinho(${p.id},0,this)" ${zero||p.qtdUn-carrinho.filter(x=>x.prodId===p.id).reduce((s,x)=>s+x.desconto*(x.qty||1),0)<1?'disabled':''} class="btn-unid ${zero?'opacity-30 cursor-not-allowed':''}">
           <span class="block text-[8px] font-black text-blue-400 mb-0.5 font-body">UNID.</span>
           <span class="text-sm font-black text-white" style="font-family:var(--font-head)">R$ ${p.precoUn.toFixed(2)}</span>
         </button>
         ${(p.packs||[]).map((pk,idx)=>{
-          const sem=p.qtdUn<pk.un;
+          const reservado=carrinho.filter(x=>x.prodId===p.id).reduce((s,x)=>s+x.desconto*(x.qty||1),0);
+          const disponivel=p.qtdUn-reservado;
+          const sem=disponivel<pk.un;
           return `<button id="btn-pack-${p.id}-${idx}" onclick="addAoCarrinho(${p.id},${idx+1},this)" ${sem?'disabled':''} class="btn-pack ${sem?'opacity-30 cursor-not-allowed':''}">
             <span class="block text-[8px] font-black text-amber-400 mb-0.5">PACK ${pk.un}x</span>
             <span class="text-sm font-black text-white" style="font-family:var(--font-head)">R$ ${pk.preco.toFixed(2)}</span>
@@ -2051,15 +2159,19 @@ function renderCatalogo(){
 /* ══ CARRINHO ══ */
 function addAoCarrinho(prodId,packIdx,btnEl){
   const p=db.estoque.find(x=>x.id===prodId);
+  if(!p)return;
   const label=packIdx===0?'UNID':`PACK ${p.packs[packIdx-1].un}`;
   const existing=carrinho.find(x=>x.prodId===prodId&&x.label===label);
+  // Calcula stock disponível descontando o que já está no carrinho
+  const reservado=carrinho.filter(x=>x.prodId===prodId).reduce((s,x)=>s+x.desconto*(x.qty||1),0);
+  const disponivelReal=p.qtdUn-reservado;
   if(packIdx===0){
-    if(p.qtdUn<1){showToast('Sem Stock',p.nome,'error');return;}
+    if(disponivelReal<1){showToast('Sem Stock',`${p.nome} — sem unidades disponíveis`,'error');return;}
     if(existing)existing.qty=(existing.qty||1)+1;
     else carrinho.push({prodId:p.id,nome:p.nome,label,preco:p.precoUn,custo:p.custoUn,desconto:1,qty:1});
   }else{
     const pack=p.packs[packIdx-1];
-    if(p.qtdUn<pack.un){showToast('Stock Insuficiente','Pack cancelado','error');return;}
+    if(disponivelReal<pack.un){showToast('Stock Insuficiente',`${p.nome} — apenas ${disponivelReal} un. disponíveis`,'error');return;}
     if(existing)existing.qty=(existing.qty||1)+1;
     else carrinho.push({prodId:p.id,nome:p.nome,label,preco:pack.preco,custo:p.custoUn*pack.un,desconto:pack.un,qty:1});
   }
@@ -2713,13 +2825,12 @@ function importarDados(input){
   reader.readAsText(file);
 }
 function resetSistema(){
-  if(!confirm('ATENÇÃO: Apaga TODOS os dados.\n\nIrreversível.'))return;
-  const check=prompt('Para confirmar, digite "DELETAR":');
-  if(check==='DELETAR'){
-    db={estoque:[],vendas:[],ponto:[],investimento:0,config:{...db.config},turno:null,turnos:[]};
-    notificarTelegram('reset',{});
-    save();showToast('Sistema','Resetado','warning');setTimeout(()=>location.reload(),1500);
-  }else{showToast('Cancelado','Código incorreto','error');}
+  if(!confirm('⚠️ ATENÇÃO\n\nIsso vai apagar TODOS os dados: produtos, vendas, ponto e turnos.\n\nEsta ação é IRREVERSÍVEL.\n\nContinuar?'))return;
+  if(!confirm('⚠️ Segunda confirmação\n\nTem CERTEZA ABSOLUTA? Todos os dados serão perdidos permanentemente.'))return;
+  db={estoque:[],vendas:[],ponto:[],investimento:0,config:{...db.config},turno:null,turnos:[]};
+  notificarTelegram('reset',{});
+  save();showToast('Sistema','Reset efetuado — recarregando...','warning');
+  setTimeout(()=>location.reload(),1800);
 }
 
 /* ══ IA INSIGHTS ══ */
@@ -3093,6 +3204,12 @@ function expandirHistorico(i){
 
 /* ══ UTIL ══ */
 function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+// Enter key on quickStock input
+document.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&document.getElementById('modalQuickStock')?.classList.contains('open')){
+    e.preventDefault();confirmarQuickStock();
+  }
+});
 function refreshUI(){renderCatalogo();renderPontoLogs();}
 
 window.onload=()=>{
