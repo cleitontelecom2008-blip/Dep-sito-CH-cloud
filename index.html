@@ -2725,117 +2725,312 @@ function resetSistema(){
 /* ══ IA INSIGHTS ══ */
 let iaHistorico = [];
 
-function construirContexto(){
+/* ══ MOTOR DE ANÁLISE LOCAL (100% offline, sem API) ══ */
+function analisarDados(){
   const totalVendas = db.vendas.length;
-  const faturacao = db.vendas.reduce((a,b)=>a+b.total,0);
-  const lucro = db.vendas.reduce((a,b)=>a+b.lucro,0);
-  const margem = faturacao>0?((lucro/faturacao)*100).toFixed(1):0;
-  const ticketMedio = totalVendas>0?(faturacao/totalVendas).toFixed(2):0;
+  const faturacao   = db.vendas.reduce((a,b)=>a+b.total,0);
+  const lucroTotal  = db.vendas.reduce((a,b)=>a+b.lucro,0);
+  const margem      = faturacao>0?(lucroTotal/faturacao)*100:0;
+  const ticketMedio = totalVendas>0?faturacao/totalVendas:0;
+  const inv         = db.investimento||0;
+  const roi         = inv>0?(lucroTotal/inv)*100:0;
+  const threshold   = db.config.lowStockThreshold||3;
 
   // Vendas por hora
   const porHora={};
   db.vendas.forEach(v=>{
-    const h=v.data.split(', ')[1]?.split(':')[0];
-    if(h)porHora[h]=(porHora[h]||0)+1;
+    const h=parseInt(v.data.split(', ')[1]?.split(':')[0]);
+    if(!isNaN(h))porHora[h]=(porHora[h]||0)+1;
   });
-  const horaTop=Object.entries(porHora).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([h,c])=>`${h}h (${c} vendas)`).join(', ');
+  const horasOrdenadas=Object.entries(porHora).sort((a,b)=>b[1]-a[1]);
+  const horaPico=horasOrdenadas[0]?`${horasOrdenadas[0][0]}h`:null;
+  const horasMortas=Object.entries(porHora).filter(([,v])=>v===1).map(([h])=>`${h}h`);
+
+  // Vendas por dia da semana
+  const porDia={};
+  db.vendas.forEach(v=>{
+    const d=new Date(v.id).toLocaleDateString('pt-BR',{weekday:'long'});
+    porDia[d]=(porDia[d]||0)+1;
+  });
+  const diaPico=Object.entries(porDia).sort((a,b)=>b[1]-a[1])[0];
+  const diaFraco=Object.entries(porDia).sort((a,b)=>a[1]-b[1])[0];
+
+  // Produtos
+  const prodSales={};
+  db.vendas.forEach(v=>{
+    v.itens.forEach(i=>{
+      const q=i.qty||1;
+      if(!prodSales[i.nome])prodSales[i.nome]={qtd:0,receita:0,lucro:0,custo:i.custo||0,preco:i.preco||0};
+      prodSales[i.nome].qtd+=q;
+      prodSales[i.nome].receita+=i.preco*q;
+      prodSales[i.nome].lucro+=(i.preco-(i.custo||0))*q;
+    });
+  });
+  const prodArr=Object.entries(prodSales).map(([nome,s])=>({
+    nome,qtd:s.qtd,receita:s.receita,lucro:s.lucro,
+    margem:s.receita>0?(s.lucro/s.receita)*100:0,
+    preco:s.preco,custo:s.custo
+  }));
+  const topQtd    = [...prodArr].sort((a,b)=>b.qtd-a.qtd);
+  const topMargem = [...prodArr].sort((a,b)=>b.margem-a.margem);
+  const topLucro  = [...prodArr].sort((a,b)=>b.lucro-a.lucro);
+  const baixaMargem = prodArr.filter(p=>p.margem<20&&p.qtd>0);
+  const semVenda  = db.estoque.filter(p=>!prodSales[p.nome]&&p.qtdUn>0);
 
   // Pagamentos
   const pg={dinheiro:0,pix:0,cartao:0};
   db.vendas.forEach(v=>{if(v.pagamento)pg[v.pagamento]++;});
 
-  // Produtos mais vendidos
-  const prodSales={};
-  db.vendas.forEach(v=>{
-    v.itens.forEach(i=>{
-      const q=i.qty||1;
-      if(!prodSales[i.nome])prodSales[i.nome]={qtd:0,receita:0,lucro:0};
-      prodSales[i.nome].qtd+=q;
-      prodSales[i.nome].receita+=i.preco*q;
-      prodSales[i.nome].lucro+=(i.preco-i.custo)*q;
-    });
-  });
-  const topProd=Object.entries(prodSales).sort((a,b)=>b[1].qtd-a[1].qtd).slice(0,5)
-    .map(([n,s])=>`${n}: ${s.qtd}un, R$${s.receita.toFixed(2)}, lucro R$${s.lucro.toFixed(2)}`).join('\n');
+  // Estoque
+  const esgotados  = db.estoque.filter(p=>p.qtdUn<=0);
+  const baixoStock = db.estoque.filter(p=>p.qtdUn>0&&p.qtdUn<=threshold);
 
-  // Produtos com mais margem
-  const maisMargem=Object.entries(prodSales).sort((a,b)=>(b[1].lucro/b[1].receita)-(a[1].lucro/a[1].receita)).slice(0,3)
-    .map(([n,s])=>`${n}: ${s.receita>0?((s.lucro/s.receita)*100).toFixed(0):0}% margem`).join(', ');
-
-  // Estoque crítico
-  const threshold=db.config.lowStockThreshold||3;
-  const estoqueZero=db.estoque.filter(p=>p.qtdUn<=0).map(p=>p.nome).join(', ');
-  const estoqueBaixo=db.estoque.filter(p=>p.qtdUn>0&&p.qtdUn<=threshold).map(p=>`${p.nome}(${p.qtdUn})`).join(', ');
-
-  // Vendas últimos 7 dias
-  const ultimos7=[];
+  // Últimos 7 dias
+  const dias7=[];
   for(let i=6;i>=0;i--){
     const d=new Date();d.setDate(d.getDate()-i);
     const ds=d.toLocaleDateString('pt-BR');
     const dv=db.vendas.filter(v=>v.data.startsWith(ds));
-    ultimos7.push(`${ds}: ${dv.length} vendas, R$${dv.reduce((a,b)=>a+b.total,0).toFixed(2)}`);
+    dias7.push({label:ds,vendas:dv.length,total:dv.reduce((a,b)=>a+b.total,0)});
+  }
+  const mediaD7=dias7.reduce((a,b)=>a+b.vendas,0)/7;
+  const diasBaixos=dias7.filter(d=>d.vendas<mediaD7*0.5&&d.vendas>0);
+
+  return {
+    totalVendas,faturacao,lucroTotal,margem,ticketMedio,inv,roi,
+    horaPico,horasMortas,horasOrdenadas,porHora,
+    diaPico,diaFraco,porDia,
+    prodArr,topQtd,topMargem,topLucro,baixaMargem,semVenda,
+    pg,esgotados,baixoStock,dias7,mediaD7,diasBaixos
+  };
+}
+
+function gerarAnalise(tipo, perguntaLivre=''){
+  const d = analisarDados();
+  const sem = d.totalVendas===0;
+  const fmt = v=>`R$ ${v.toFixed(2)}`;
+  const pct = v=>`${v.toFixed(1)}%`;
+
+  if(tipo==='lucro'){
+    if(sem) return gerarSemDados();
+    let h=`<h3>📊 Situação Atual</h3><ul>`;
+    h+=`<li>Margem média: <strong>${pct(d.margem)}</strong> ${d.margem<25?'⚠️ Baixa — meta recomendada: 30%+':'✅ Saudável'}</li>`;
+    h+=`<li>Lucro acumulado: <strong>${fmt(d.lucroTotal)}</strong></li>`;
+    h+=`<li>Ticket médio: <strong>${fmt(d.ticketMedio)}</strong></li>`;
+    if(d.inv>0)h+=`<li>ROI: <strong>${pct(d.roi)}</strong> sobre investimento de ${fmt(d.inv)}</li>`;
+    h+=`</ul>`;
+
+    h+=`<h3>💡 Ações para Aumentar o Lucro</h3><ul>`;
+    if(d.baixaMargem.length){
+      h+=`<li>Produtos com margem abaixo de 20%: <strong>${d.baixaMargem.map(p=>p.nome).join(', ')}</strong>. Considera aumentar o preço em 10-15% ou renegociar o custo de compra.</li>`;
+    }
+    if(d.topMargem[0]){
+      h+=`<li>Produto mais lucrativo: <strong>${d.topMargem[0].nome}</strong> (${pct(d.topMargem[0].margem)} margem). Promove mais este produto — é o teu melhor gerador de lucro.</li>`;
+    }
+    if(d.topQtd[0]&&d.topQtd[0].margem<30){
+      h+=`<li><strong>${d.topQtd[0].nome}</strong> é o mais vendido mas tem ${pct(d.topQtd[0].margem)} de margem. Um aumento de R$ 0,50 no preço geraria aprox. <strong>${fmt(d.topQtd[0].qtd*0.5)}</strong> de lucro extra.</li>`;
+    }
+    if(d.semVenda.length){
+      h+=`<li>${d.semVenda.length} produto(s) sem vendas registadas: <strong>${d.semVenda.slice(0,3).map(p=>p.nome).join(', ')}</strong>. Considera liquidar ou reposicionar.</li>`;
+    }
+    h+=`<li>Incentiva pagamento via <strong>PIX ou cartão</strong> — evita saídas de troco e agiliza o atendimento.</li>`;
+    h+=`</ul>`;
+    return h;
   }
 
-  return `=== DADOS DO NEGÓCIO: ${db.config.storeName||'CH Gestão Assis'} ===
+  if(tipo==='produtos'){
+    if(sem) return gerarSemDados();
+    let h=`<h3>🏆 Mais Vendidos</h3><ul>`;
+    d.topQtd.slice(0,5).forEach((p,i)=>{
+      h+=`<li>${i+1}. <strong>${p.nome}</strong> — ${p.qtd} un. vendidas, receita ${fmt(p.receita)}</li>`;
+    });
+    h+=`</ul>`;
 
-FINANCEIRO:
-- Total de vendas: ${totalVendas}
-- Faturação total: R$ ${faturacao.toFixed(2)}
-- Lucro total: R$ ${lucro.toFixed(2)}
-- Margem média: ${margem}%
-- Ticket médio: R$ ${ticketMedio}
-- Investimento: R$ ${(db.investimento||0).toFixed(2)}
-- ROI: ${db.investimento>0?((lucro/db.investimento)*100).toFixed(1):0}%
+    h+=`<h3>💰 Maior Margem de Lucro</h3><ul>`;
+    d.topMargem.slice(0,3).forEach(p=>{
+      h+=`<li><strong>${p.nome}</strong> — ${pct(p.margem)} de margem. <em>Promove ativamente.</em></li>`;
+    });
+    h+=`</ul>`;
 
-ÚLTIMOS 7 DIAS:
-${ultimos7.join('\n')}
+    if(d.baixaMargem.length){
+      h+=`<h3>⚠️ Produtos a Rever</h3><ul>`;
+      d.baixaMargem.forEach(p=>{
+        h+=`<li><strong>${p.nome}</strong> — apenas ${pct(p.margem)} de margem. Aumenta o preço ou renegocia o custo.</li>`;
+      });
+      h+=`</ul>`;
+    }
 
-TOP PRODUTOS MAIS VENDIDOS:
-${topProd||'Sem dados'}
+    if(d.semVenda.length){
+      h+=`<h3>📦 Sem Vendas</h3><ul>`;
+      d.semVenda.slice(0,4).forEach(p=>{
+        h+=`<li><strong>${p.nome}</strong> — ${p.qtdUn} un. paradas. Faz promoção ou remove do catálogo.</li>`;
+      });
+      h+=`</ul>`;
+    }
 
-PRODUTOS COM MAIOR MARGEM:
-${maisMargem||'Sem dados'}
+    h+=`<h3>🎁 Sugestão de Packs</h3><ul>`;
+    if(d.topQtd[0]&&d.topQtd[1]){
+      h+=`<li>Cria um pack <strong>${d.topQtd[0].nome} + ${d.topQtd[1].nome}</strong> com 5-10% de desconto — aumenta o ticket médio.</li>`;
+    }
+    if(d.topQtd[0]){
+      h+=`<li>Pack de 6x <strong>${d.topQtd[0].nome}</strong> com pequeno desconto incentiva compras maiores e garante retorno do cliente.</li>`;
+    }
+    h+=`</ul>`;
+    return h;
+  }
 
-FORMAS DE PAGAMENTO:
-- Dinheiro: ${pg.dinheiro} vendas
-- PIX: ${pg.pix} vendas
-- Cartão: ${pg.cartao} vendas
+  if(tipo==='estoque'){
+    let h=`<h3>🔴 Urgente — Esgotados</h3>`;
+    if(d.esgotados.length){
+      h+=`<ul>`;
+      d.esgotados.forEach(p=>{h+=`<li><strong>${p.nome}</strong> — ESGOTADO. Repor imediatamente.</li>`;});
+      h+=`</ul>`;
+    }else{h+=`<p style="color:#10b981;font-size:.7rem;font-weight:700">✅ Nenhum produto esgotado.</p>`;}
 
-HORÁRIOS DE PICO:
-${horaTop||'Sem dados suficientes'}
+    h+=`<h3>⚠️ Stock Baixo</h3>`;
+    if(d.baixoStock.length){
+      h+=`<ul>`;
+      d.baixoStock.forEach(p=>{
+        const vendPorDia=d.totalVendas>0?(d.prodArr.find(x=>x.nome===p.nome)?.qtd||0)/(d.dias7.filter(x=>x.vendas>0).length||1):0;
+        const diasRestantes=vendPorDia>0?Math.floor(p.qtdUn/vendPorDia):null;
+        h+=`<li><strong>${p.nome}</strong> — ${p.qtdUn} un.${diasRestantes?` (estimativa: ${diasRestantes} dia${diasRestantes!==1?'s':''} de stock)`:''}. Comprar logo.</li>`;
+      });
+      h+=`</ul>`;
+    }else{h+=`<p style="color:#10b981;font-size:.7rem;font-weight:700">✅ Nenhum produto em nível crítico.</p>`;}
 
-ESTOQUE:
-- Total de produtos: ${db.estoque.length}
-- Produtos esgotados: ${estoqueZero||'Nenhum'}
-- Stock baixo: ${estoqueBaixo||'Nenhum'}
+    if(d.semVenda.length){
+      h+=`<h3>📦 Capital Parado</h3><ul>`;
+      d.semVenda.slice(0,4).forEach(p=>{
+        const valorParado=p.qtdUn*(p.custoUn||0);
+        h+=`<li><strong>${p.nome}</strong> — ${p.qtdUn} un. sem venda${valorParado>0?`, capital parado: ${fmt(valorParado)}`:''}. Liquida com desconto.</li>`;
+      });
+      h+=`</ul>`;
+    }
 
-TURNOS: ${db.turnos.length} turnos registados`;
+    h+=`<h3>📋 Recomendações</h3><ul>`;
+    h+=`<li>Mantém no mínimo <strong>${threshold+2} unidades</strong> de cada produto mais vendido como stock de segurança.</li>`;
+    if(d.topQtd[0])h+=`<li>O produto <strong>${d.topQtd[0].nome}</strong> é o mais vendido — nunca deixa esgotar.</li>`;
+    h+=`<li>Compra em quantidades maiores os produtos com alta rotatividade para negociar melhor preço com fornecedor.</li>`;
+    h+=`</ul>`;
+    return h;
+  }
+
+  if(tipo==='horarios'){
+    if(sem) return gerarSemDados();
+    let h=`<h3>🕐 Horários de Pico</h3><ul>`;
+    d.horasOrdenadas.slice(0,3).forEach(([hora,qtd])=>{
+      h+=`<li><strong>${hora}h</strong> — ${qtd} venda${qtd!==1?'s':''} (${pct(qtd/d.totalVendas*100)} do total)</li>`;
+    });
+    h+=`</ul>`;
+
+    if(d.diaPico){
+      h+=`<h3>📅 Dias da Semana</h3><ul>`;
+      h+=`<li>Dia mais forte: <strong>${d.diaPico[0]}</strong> (${d.diaPico[1]} vendas)</li>`;
+      if(d.diaFraco)h+=`<li>Dia mais fraco: <strong>${d.diaFraco[0]}</strong> (${d.diaFraco[1]} vendas) — considera promoção neste dia</li>`;
+      h+=`</ul>`;
+    }
+
+    h+=`<h3>💡 Como Aproveitar os Picos</h3><ul>`;
+    if(d.horaPico)h+=`<li>Garante estoque completo e equipe disponível às <strong>${d.horaPico}</strong> — teu horário mais movimentado.</li>`;
+    if(d.horasMortas.length)h+=`<li>Horários mortos (${d.horasMortas.slice(0,3).join(', ')}): usa para repor estoque, limpar e preparar o espaço.</li>`;
+    h+=`<li>Nos horários de pico, evita pausas e garante que o PDV está sempre pronto para registar.</li>`;
+    if(d.diasBaixos.length)h+=`<li>Dias com movimento abaixo da média: considera promoção relâmpago ou desconto especial para aumentar fluxo.</li>`;
+    h+=`</ul>`;
+    return h;
+  }
+
+  if(tipo==='precos'){
+    if(sem) return gerarSemDados();
+    let h=`<h3>📊 Análise dos Preços Atuais</h3><ul>`;
+    d.prodArr.slice(0,6).forEach(p=>{
+      const status=p.margem<20?'⚠️ Baixa':p.margem<35?'🟡 OK':'✅ Boa';
+      h+=`<li><strong>${p.nome}</strong> — margem ${pct(p.margem)} ${status}</li>`;
+    });
+    h+=`</ul>`;
+
+    if(d.baixaMargem.length){
+      h+=`<h3>💸 Preços a Ajustar</h3><ul>`;
+      d.baixaMargem.forEach(p=>{
+        const novoPreco=p.custo>0?p.custo/0.70:null;
+        h+=`<li><strong>${p.nome}</strong>: margem atual ${pct(p.margem)}${novoPreco?` → preço sugerido para 30%: <strong>${fmt(novoPreco)}</strong>`:''}.</li>`;
+      });
+      h+=`</ul>`;
+    }
+
+    h+=`<h3>🎁 Packs Sugeridos</h3><ul>`;
+    if(d.topQtd[0]){
+      const p=d.topQtd[0];const precoPack6=p.preco>0?p.preco*6*0.92:null;
+      h+=`<li>Pack 6x <strong>${p.nome}</strong>${precoPack6?` por ${fmt(precoPack6)} (desconto 8%)`:''}  — incentiva compra maior.</li>`;
+    }
+    if(d.topQtd[1]){
+      const p=d.topQtd[1];const precoPack=p.preco>0?p.preco*4*0.90:null;
+      h+=`<li>Pack 4x <strong>${p.nome}</strong>${precoPack?` por ${fmt(precoPack)} (desconto 10%)`:''}.</li>`;
+    }
+    h+=`</ul>`;
+
+    h+=`<h3>🏷 Estratégia de Desconto</h3><ul>`;
+    h+=`<li>Usa desconto máximo de <strong>10%</strong> em vendas acima de ${fmt(d.ticketMedio*1.5)} para não corroer margem.</li>`;
+    h+=`<li>Nunca dá desconto em produtos com margem abaixo de 25%.</li>`;
+    h+=`<li>Desconto em quantidade (packs) é melhor que desconto no preço unitário.</li>`;
+    h+=`</ul>`;
+    return h;
+  }
+
+  if(tipo==='geral'){
+    if(sem) return gerarSemDados();
+    let h=`<h3>✅ Pontos Fortes</h3><ul>`;
+    if(d.margem>=30)h+=`<li>Margem média saudável de <strong>${pct(d.margem)}</strong>.</li>`;
+    if(d.totalVendas>10)h+=`<li><strong>${d.totalVendas} vendas</strong> registadas — boa base de dados para análise.</li>`;
+    if(d.topQtd[0])h+=`<li>Produto líder bem estabelecido: <strong>${d.topQtd[0].nome}</strong>.</li>`;
+    if(d.roi>50)h+=`<li>ROI de <strong>${pct(d.roi)}</strong> — retorno acima da média.</li>`;
+    if(d.esgotados.length===0)h+=`<li>Nenhum produto esgotado — boa gestão de stock.</li>`;
+    h+=`</ul>`;
+
+    h+=`<h3>⚠️ Pontos Críticos</h3><ul>`;
+    if(d.margem<25)h+=`<li>Margem abaixo de 25% — rever precificação dos produtos principais.</li>`;
+    if(d.esgotados.length)h+=`<li><strong>${d.esgotados.length} produto(s) esgotado(s)</strong> — perda de vendas direta.</li>`;
+    if(d.baixaMargem.length)h+=`<li>${d.baixaMargem.length} produto(s) com margem abaixo de 20%: <strong>${d.baixaMargem.map(p=>p.nome).join(', ')}</strong>.</li>`;
+    if(d.semVenda.length)h+=`<li>${d.semVenda.length} produto(s) sem nenhuma venda — capital parado no estoque.</li>`;
+    if(d.ticketMedio<20)h+=`<li>Ticket médio baixo (${fmt(d.ticketMedio)}) — criar packs pode ajudar.</li>`;
+    h+=`</ul>`;
+
+    h+=`<h3>🚀 Plano de Ação</h3><ul>`;
+    let acao=1;
+    if(d.esgotados.length)h+=`<li><strong>${acao++}.</strong> Repor imediatamente: ${d.esgotados.map(p=>p.nome).join(', ')}.</li>`;
+    if(d.baixoStock.length)h+=`<li><strong>${acao++}.</strong> Reabastecer com urgência: ${d.baixoStock.map(p=>p.nome).join(', ')}.</li>`;
+    if(d.topMargem[0])h+=`<li><strong>${acao++}.</strong> Promover <strong>${d.topMargem[0].nome}</strong> — maior margem do negócio (${pct(d.topMargem[0].margem)}).</li>`;
+    if(d.baixaMargem[0])h+=`<li><strong>${acao++}.</strong> Aumentar preço de <strong>${d.baixaMargem[0].nome}</strong> em pelo menos 10%.</li>`;
+    if(d.topQtd[0])h+=`<li><strong>${acao++}.</strong> Criar pack de 6x <strong>${d.topQtd[0].nome}</strong> com 8% de desconto.</li>`;
+    if(d.semVenda.length)h+=`<li><strong>${acao++}.</strong> Fazer promoção ou liquidar produtos parados: ${d.semVenda.slice(0,2).map(p=>p.nome).join(', ')}.</li>`;
+    if(d.horaPico)h+=`<li><strong>${acao++}.</strong> Garantir estoque completo e equipe disponível às <strong>${d.horaPico}</strong>.</li>`;
+    h+=`</ul>`;
+    return h;
+  }
+
+  if(tipo==='livre'){
+    const q=perguntaLivre.toLowerCase();
+    // Router inteligente por palavras-chave
+    if(q.includes('lucro')||q.includes('ganho')||q.includes('dinheiro'))return gerarAnalise('lucro');
+    if(q.includes('estoque')||q.includes('comprar')||q.includes('repor')||q.includes('produto'))return gerarAnalise('estoque');
+    if(q.includes('hora')||q.includes('horário')||q.includes('dia')||q.includes('semana'))return gerarAnalise('horarios');
+    if(q.includes('preço')||q.includes('preco')||q.includes('desconto')||q.includes('pack'))return gerarAnalise('precos');
+    if(q.includes('vend')||q.includes('fatur'))return gerarAnalise('produtos');
+    return gerarAnalise('geral');
+  }
+
+  return gerarSemDados();
 }
 
-const IA_PROMPTS = {
-  lucro: 'Com base nos dados do negócio, analisa as margens de lucro e dá 5 recomendações concretas e específicas para aumentar o lucro. Foca em preços, mix de produtos e redução de custos.',
-  produtos: 'Analisa o desempenho dos produtos e recomenda: quais produtos promover mais, quais têm baixo desempenho, que novos produtos poderiam ser adicionados ao catálogo, e como usar packs para aumentar o ticket médio.',
-  estoque: 'Analisa o estoque atual e dá recomendações sobre: quais produtos repor com urgência, quantidade ideal de compra, quais produtos estão com excesso de estoque, e como otimizar o capital investido em estoque.',
-  horarios: 'Com base nos dados de vendas por horário e dia, identifica os picos de movimento, os horários mortos, e recomenda estratégias para aumentar as vendas nos momentos de menor movimento.',
-  precos: 'Analisa a estrutura de preços atual e recomenda: ajustes de preço por produto, criação de packs estratégicos com os produtos mais vendidos, promoções que façam sentido, e como usar desconto sem perder margem.',
-  geral: 'Faz uma análise completa do negócio. Identifica os 3 pontos fortes, os 3 pontos críticos a melhorar, e dá um plano de ação com 7 medidas concretas para aumentar o faturamento e o lucro nas próximas semanas.',
-};
-
-function formatarRespostaIA(texto){
-  // Converte markdown básico para HTML legível
-  return texto
-    .replace(/### (.*)/g,'<h3>$1</h3>')
-    .replace(/## (.*)/g,'<h3>$1</h3>')
-    .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g,'<em>$1</em>')
-    .replace(/^[\-\•] (.+)/gm,'<li>$1</li>')
-    .replace(/^\d+\. (.+)/gm,'<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
-    .replace(/\n\n/g,'<br><br>')
-    .replace(/\n/g,'<br>');
+function gerarSemDados(){
+  return `<h3>📋 Ainda sem dados suficientes</h3>
+    <ul>
+      <li>Regista pelo menos <strong>5 vendas</strong> para gerar análises úteis.</li>
+      <li>Adiciona os teus produtos com custo e preço de venda corretos.</li>
+      <li>Quanto mais dados tiveres, mais precisas serão as recomendações.</li>
+    </ul>`;
 }
 
-async function pedirIA(tipo){
+function pedirIA(tipo){
   const resultCard=document.getElementById('iaResultCard');
   const loading=document.getElementById('iaLoading');
   const resultText=document.getElementById('iaResultText');
@@ -2843,72 +3038,33 @@ async function pedirIA(tipo){
   const timestamp=document.getElementById('iaTimestamp');
 
   const titulos={
-    lucro:'💰 Aumentar Lucro',
-    produtos:'📦 Produtos Estratégicos',
-    estoque:'🏭 Gestão de Estoque',
-    horarios:'🕐 Melhores Horários',
-    precos:'🏷 Estratégia de Preços',
-    geral:'✨ Análise Completa',
-    livre:'💬 Pergunta Livre',
+    lucro:'💰 Aumentar Lucro',produtos:'📦 Produtos Estratégicos',
+    estoque:'🏭 Gestão de Estoque',horarios:'🕐 Melhores Horários',
+    precos:'🏷 Estratégia de Preços',geral:'✨ Análise Completa',livre:'💬 Pergunta Livre',
   };
 
-  if(tipo==='livre'){
-    const pergunta=document.getElementById('iaInput').value.trim();
-    if(!pergunta){showToast('IA','Escreve uma pergunta primeiro','warning');return;}
-  }
+  const perguntaLivre=tipo==='livre'?(document.getElementById('iaInput')?.value.trim()||''):'';
+  if(tipo==='livre'&&!perguntaLivre){showToast('IA','Escreve uma pergunta primeiro','warning');return;}
 
   resultCard.classList.remove('hidden');
   loading.classList.remove('hidden');
   resultText.innerHTML='';
-  title.textContent=titulos[tipo]||'Análise IA';
+  title.textContent=titulos[tipo]||'Análise';
   timestamp.textContent='';
   resultCard.scrollIntoView({behavior:'smooth',block:'start'});
 
-  const contexto=construirContexto();
-  const perguntaLivre=tipo==='livre'?document.getElementById('iaInput').value.trim():'';
-  const prompt=tipo==='livre'
-    ?`${perguntaLivre}\n\nResponde de forma prática e específica para este negócio.`
-    :IA_PROMPTS[tipo];
-
-  try{
-    const response = await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:1000,
-        system:`És um consultor de negócios especialista em pequenos comércios de bebidas e alimentação no Brasil. 
-Tens acesso aos dados reais do negócio abaixo. 
-Dá sempre recomendações CONCRETAS, com números específicos sempre que possível. 
-Usa linguagem direta, sem rodeios. Formato: títulos em markdown (###), listas com "-".
-Responde sempre em português do Brasil.
-
-${contexto}`,
-        messages:[{role:'user',content:prompt}]
-      })
-    });
-
-    const data=await response.json();
+  // Simula pequeno delay para UX (análise local é instantânea)
+  setTimeout(()=>{
     loading.classList.add('hidden');
+    const html=gerarAnalise(tipo,perguntaLivre);
+    resultText.innerHTML=html;
+    timestamp.textContent=new Date().toLocaleTimeString('pt-BR');
 
-    if(data.content&&data.content[0]){
-      const texto=data.content[0].text;
-      resultText.innerHTML=formatarRespostaIA(texto);
-      timestamp.textContent=new Date().toLocaleTimeString('pt-BR');
-
-      // Guardar no histórico
-      iaHistorico.unshift({tipo,titulo:titulos[tipo],texto,hora:new Date().toLocaleString('pt-BR')});
-      if(iaHistorico.length>5)iaHistorico.pop();
-      renderIAHistorico();
-
-      if(tipo==='livre')document.getElementById('iaInput').value='';
-    }else{
-      resultText.innerHTML=`<p class="text-red-400 text-[10px]">Erro: ${data.error?.message||'Resposta inválida'}</p>`;
-    }
-  }catch(e){
-    loading.classList.add('hidden');
-    resultText.innerHTML=`<p class="text-red-400 text-[10px]">⚠️ Sem conexão ou API indisponível.<br>Verifica a internet e tenta novamente.</p>`;
-  }
+    iaHistorico.unshift({tipo,titulo:titulos[tipo],html,hora:new Date().toLocaleString('pt-BR')});
+    if(iaHistorico.length>5)iaHistorico.pop();
+    renderIAHistorico();
+    if(tipo==='livre'&&document.getElementById('iaInput'))document.getElementById('iaInput').value='';
+  },600);
 }
 
 function renderIAHistorico(){
@@ -2922,14 +3078,13 @@ function renderIAHistorico(){
         <span class="text-[10px] font-black text-slate-300">${h.titulo}</span>
         <span class="text-[8px] text-slate-600 font-bold">${h.hora}</span>
       </div>
-      <p class="text-[9px] text-slate-500 mt-1 truncate">${h.texto.substring(0,80)}...</p>
     </div>`).join('');
 }
 
 function expandirHistorico(i){
   const h=iaHistorico[i];
   document.getElementById('iaResultTitle').textContent=h.titulo;
-  document.getElementById('iaResultText').innerHTML=formatarRespostaIA(h.texto);
+  document.getElementById('iaResultText').innerHTML=h.html;
   document.getElementById('iaTimestamp').textContent=h.hora;
   document.getElementById('iaLoading').classList.add('hidden');
   document.getElementById('iaResultCard').classList.remove('hidden');
